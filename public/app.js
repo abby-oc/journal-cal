@@ -379,3 +379,72 @@ $('search').addEventListener('input', render);
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 loadAll();
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// SYSTEM LOG
+// ══════════════════════════════════════════════════════════════════════════
+
+const TYPE_META = {
+  insight:    { icon: '🧠', color: '#6c8cff', label: 'Insight' },
+  decision:   { icon: '⚙️', color: '#f59e0b', label: 'Decision' },
+  alert:      { icon: '🚨', color: '#f87171', label: 'Alert' },
+  experiment: { icon: '🧪', color: '#a78bfa', label: 'Experiment' },
+  hypothesis: { icon: '💡', color: '#34d399', label: 'Hypothesis' },
+  status:     { icon: '📊', color: '#6b7280', label: 'Status' },
+};
+
+async function loadSystemLog() {
+  const type = document.getElementById('log-type-filter')?.value || '';
+  const url = type ? `/api/system-log?limit=100&type=${type}` : '/api/system-log?limit=100';
+  const res = await fetch(url);
+  const entries = await res.json();
+  renderSystemLog(entries);
+}
+
+function renderSystemLog(entries) {
+  const el = document.getElementById('system-log-list');
+  if (!entries.length) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:#6b7280;">No entries yet. Analyst will post here on next heartbeat.</div>';
+    return;
+  }
+
+  el.innerHTML = entries.map(e => {
+    const meta = TYPE_META[e.type] || TYPE_META.status;
+    const ts = new Date(e.created_at).toLocaleString('en-US', {
+      month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'
+    });
+    const content = (e.content || '').replace(/\n/g, '<br>');
+    return `
+      <div class="trade-card" style="border-left:3px solid ${meta.color}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:1.1rem">${meta.icon}</span>
+            <span style="background:${meta.color}22;color:${meta.color};padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:600;text-transform:uppercase">${meta.label}</span>
+            ${e.title ? `<span style="font-weight:600;color:#e2e6f0">${e.title}</span>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="color:#6b7280;font-size:0.78rem">${ts}</span>
+            <button onclick="deleteLogEntry('${e.id}')" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:0.85rem;padding:2px 4px" title="Delete">✕</button>
+          </div>
+        </div>
+        <div style="color:#b0b8d0;font-size:0.88rem;line-height:1.6">${content}</div>
+        ${e.tags?.length ? `<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${e.tags.map(t => `<span style="background:#2e3350;color:#8892b0;padding:1px 7px;border-radius:10px;font-size:0.72rem">${t}</span>`).join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+async function deleteLogEntry(id) {
+  if (!confirm('Delete this entry?')) return;
+  await fetch(`/api/system-log/${id}`, { method: 'DELETE' });
+  loadSystemLog();
+}
+
+// ── View toggle ───────────────────────────────────────────────────────────
+function setView(view) {
+  document.getElementById('view-trades').style.display = view === 'trades' ? '' : 'none';
+  document.getElementById('view-log').style.display    = view === 'log'    ? '' : 'none';
+  document.getElementById('view-trades-btn').classList.toggle('active', view === 'trades');
+  document.getElementById('view-log-btn').classList.toggle('active', view === 'log');
+  if (view === 'log') loadSystemLog();
+}

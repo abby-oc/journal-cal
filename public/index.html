@@ -15,6 +15,12 @@
 
     <div class="stat-cards" id="stat-cards"></div>
 
+    <div class="view-toggle">
+      <button class="view-btn active" id="view-trades-btn" onclick="setView('trades')">📒 Trades</button>
+      <button class="view-btn" id="view-log-btn" onclick="setView('log')">🧠 System Log</button>
+    </div>
+
+    <div id="trade-sidebar-section">
     <div class="filters">
       <div class="filter-label">Status</div>
       <button class="filter-btn active" data-filter="all">All Trades</button>
@@ -37,18 +43,44 @@
     <div class="search-wrap">
       <input id="search" type="text" placeholder="Search thesis, notes…"/>
     </div>
+    </div><!-- /trade-sidebar-section -->
   </aside>
 
   <!-- Main -->
   <main class="main">
-    <div class="top-bar">
-      <div>
-        <h1>Trade Log</h1>
-        <div id="pnl-summary" class="pnl-summary"></div>
+    <!-- Trade Log view -->
+    <div id="view-trades">
+      <div class="top-bar">
+        <div>
+          <h1>Trade Log</h1>
+          <div id="pnl-summary" class="pnl-summary"></div>
+        </div>
+        <button class="btn-primary" id="new-btn">+ Log Trade</button>
       </div>
-      <button class="btn-primary" id="new-btn">+ Log Trade</button>
+      <div id="trade-list" class="trade-list"></div>
     </div>
-    <div id="trade-list" class="trade-list"></div>
+
+    <!-- System Log view -->
+    <div id="view-log" style="display:none">
+      <div class="top-bar">
+        <div>
+          <h1>System Log</h1>
+          <div class="pnl-summary" id="log-subtitle">Abby's analysis &amp; decisions</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="log-type-filter" onchange="loadSystemLog()" style="background:#22263a;color:#e2e6f0;border:1px solid #2e3350;padding:6px 10px;border-radius:6px;font-size:0.85rem">
+            <option value="">All types</option>
+            <option value="insight">Insights</option>
+            <option value="decision">Decisions</option>
+            <option value="alert">Alerts</option>
+            <option value="experiment">Experiments</option>
+            <option value="status">Status</option>
+          </select>
+          <button class="btn-primary" onclick="loadSystemLog()">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="system-log-list" class="trade-list"></div>
+    </div>
   </main>
 
 </div>

@@ -248,3 +248,16 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
   padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.88rem; transition: all .15s;
 }
 .form-actions button[type="button"]:hover { border-color: var(--text); color: var(--text); }
+
+/* View toggle */
+.view-toggle {
+  display: flex; gap: 4px; margin-bottom: 16px;
+  background: var(--surface2); border-radius: 8px; padding: 4px;
+}
+.view-btn {
+  flex: 1; background: none; border: none; color: var(--muted);
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 0.8rem; font-weight: 600; transition: all .15s;
+}
+.view-btn.active { background: var(--surface3, #2e3350); color: var(--text); }
+.view-btn:hover:not(.active) { color: var(--text); }

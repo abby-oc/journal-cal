@@ -218,4 +218,38 @@ app.get('/api/stats', async (req, res) => {
   });
 });
 
+
+// ── GET system log ────────────────────────────────────────────────────────
+app.get('/api/system-log', async (req, res) => {
+  const { type, limit = 50 } = req.query;
+  let q = supabase.from('system_log').select('*').order('created_at', { ascending: false }).limit(parseInt(limit));
+  if (type) q = q.eq('type', type);
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ── POST system log ───────────────────────────────────────────────────────
+app.post('/api/system-log', async (req, res) => {
+  const { type, title, content, data: jsonData, tags } = req.body;
+  if (!content) return res.status(400).json({ error: 'content required' });
+  const { data, error } = await supabase.from('system_log').insert([{
+    type:    type    || 'insight',
+    title:   title   || null,
+    content,
+    data:    jsonData || {},
+    tags:    Array.isArray(tags) ? tags : [],
+  }]).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ── DELETE system log entry ───────────────────────────────────────────────
+app.delete('/api/system-log/:id', async (req, res) => {
+  const { error } = await supabase.from('system_log').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 app.listen(PORT, () => console.log(`Trade Journal running at http://localhost:${PORT}`));
+
