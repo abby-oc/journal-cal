@@ -66,13 +66,18 @@ app.get('/login', (req, res) => {
 });
 
 app.post('/login', (req, res) => {
-  if (req.body.pass === PASS) {
-    const ts  = Date.now().toString();
-    const tok = `${ts}.${sign(ts)}`;
-    res.setHeader('Set-Cookie', `${COOKIE}=${tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${7*24*3600}`);
-    return res.redirect('/');
-  }
-  res.redirect('/login?err=1');
+  let body = '';
+  req.on('data', chunk => { body += chunk.toString(); });
+  req.on('end', () => {
+    const pass = new URLSearchParams(body).get('pass');
+    if (pass === PASS) {
+      const ts  = Date.now().toString();
+      const tok = `${ts}.${sign(ts)}`;
+      res.setHeader('Set-Cookie', `${COOKIE}=${tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${7*24*3600}`);
+      return res.redirect('/');
+    }
+    res.redirect('/login?err=1');
+  });
 });
 
 // ── Auth gate ─────────────────────────────────────────────────────────────
