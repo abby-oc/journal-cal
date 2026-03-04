@@ -1,192 +1,366 @@
-let allEvents = [];
-let activeFilter = 'all';
-let activeTag = null;
+// ── State ──────────────────────────────────────────────────────────────────
+let allTrades = [];
+let activeFilter   = 'all';
+let activeSymbol   = null;
+let activeError    = null;
+let currentRating  = 0;
 
-const modal = document.getElementById('modal');
-const form = document.getElementById('event-form');
-const eventList = document.getElementById('event-list');
-const tagList = document.getElementById('tag-list');
-const searchInput = document.getElementById('search');
-
-// Helpers
-const getTags = e => {
-  if (Array.isArray(e.tags) && e.tags.length) return e.tags;
-  if (typeof e.tags === 'string' && e.tags) return e.tags.split(',').map(t => t.trim()).filter(Boolean);
-  if (typeof e.tag === 'string' && e.tag) return e.tag.split(',').map(t => t.trim()).filter(Boolean);
-  return ['general'];
-};
-
-const fmt = dateStr => {
-  const d = new Date(dateStr + 'T12:00:00');
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-};
+// ── Helpers ────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const today = () => new Date().toISOString().split('T')[0];
+const fmtDate = d => { const x = new Date(d + 'T12:00:00'); return x.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' }); };
+const fmtNum = (n, d=2) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits:d, maximumFractionDigits:d });
+const fmtPnl = (n) => n == null ? '—' : `${n >= 0 ? '+' : ''}${fmtNum(n)}%`;
 
-// Load
-async function loadEvents() {
-  const res = await fetch('/api/events');
-  allEvents = await res.json();
+const ERROR_LABELS = {
+  good_trade:      '✅ Good trade',
+  fomo:            '😰 FOMO',
+  early_exit:      '⏰ Early exit',
+  held_too_long:   '📉 Held too long',
+  no_stop:         '🚫 No stop',
+  poor_sizing:     '⚖️ Poor sizing',
+  ignored_signal:  '🙈 Ignored signal',
+  overtrading:     '🔄 Overtrading',
+  bad_entry:       '📍 Bad entry',
+  news_event:      '📰 News event',
+};
+
+const EXIT_LABELS = {
+  target_hit: '🎯 Target hit',
+  stop_hit:   '🛑 Stop hit',
+  manual:     '✋ Manual',
+  cancelled:  '❌ Cancelled',
+};
+
+// ── Data ───────────────────────────────────────────────────────────────────
+async function loadAll() {
+  const [tradesRes, statsRes] = await Promise.all([
+    fetch('/api/trades'),
+    fetch('/api/stats'),
+  ]);
+  allTrades = await tradesRes.json();
+  const stats = await statsRes.json();
+  renderStats(stats);
   render();
 }
 
-// Render
-function render() {
-  const q = searchInput.value.toLowerCase();
+// ── Stats sidebar ──────────────────────────────────────────────────────────
+function renderStats(s) {
+  const pnlClass = s.total_pnl >= 0 ? 'pos' : 'neg';
+  const pnlSign  = s.total_pnl >= 0 ? '+' : '';
+  $('stat-cards').innerHTML = `
+    <div class="stat-card"><div class="sc-label">Total P&amp;L</div>
+      <div class="sc-value ${pnlClass}">${pnlSign}$${fmtNum(s.total_pnl)}</div></div>
+    <div class="stat-card"><div class="sc-label">Win Rate</div>
+      <div class="sc-value ${s.win_rate >= 50 ? 'pos' : 'neg'}">${s.win_rate ?? '—'}%</div></div>
+    <div class="stat-card"><div class="sc-label">Open</div>
+      <div class="sc-value neutral">${s.open}</div></div>
+    <div class="stat-card"><div class="sc-label">Closed</div>
+      <div class="sc-value neutral">${s.closed}</div></div>
+    <div class="stat-card"><div class="sc-label">Avg R:R</div>
+      <div class="sc-value ${s.avg_rr >= 1.5 ? 'pos' : 'neg'}">${s.avg_rr || '—'}</div></div>
+    <div class="stat-card"><div class="sc-label">Avg Rating</div>
+      <div class="sc-value neutral">${s.avg_rating ? '★ ' + s.avg_rating : '—'}</div></div>
+  `;
 
-  let events = [...allEvents];
+  // P&L summary in top bar
+  $('pnl-summary').innerHTML = s.closed
+    ? `${s.closed} closed · <span class="${pnlClass}">${pnlSign}$${fmtNum(s.total_pnl)}</span> · Win rate ${s.win_rate}% (${s.wins}W / ${s.losses}L)`
+    : 'No closed trades yet.';
 
-  if (activeFilter !== 'all') events = events.filter(e => e.status === activeFilter);
-  if (activeTag) events = events.filter(e => getTags(e).includes(activeTag));
-  if (q) events = events.filter(e =>
-    e.title.toLowerCase().includes(q) ||
-    (e.notes || '').toLowerCase().includes(q) ||
-    getTags(e).join(' ').toLowerCase().includes(q)
+  // Symbol chips
+  const symbols = [...new Set(allTrades.map(t => t.symbol))];
+  $('symbol-filters').className = 'chip-group';
+  $('symbol-filters').innerHTML = symbols.map(sym =>
+    `<span class="chip ${activeSymbol === sym ? 'active' : ''}" data-sym="${sym}">${sym.replace('-PERP','')}</span>`
+  ).join('');
+  $('symbol-filters').querySelectorAll('.chip').forEach(c =>
+    c.addEventListener('click', () => { activeSymbol = activeSymbol === c.dataset.sym ? null : c.dataset.sym; render(); })
   );
 
-  // Sort by date desc
-  events.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
-
-  // Build tag list from all events
-  const tags = [...new Set(allEvents.flatMap(e => getTags(e)))];
-  tagList.innerHTML = tags.map(t =>
-    `<span class="tag-chip ${activeTag === t ? 'active' : ''}" data-tag="${t}">${t}</span>`
+  // Error chips
+  const errors = [...new Set(allTrades.filter(t => t.error_category).map(t => t.error_category))];
+  $('error-filters').className = 'chip-group';
+  $('error-filters').innerHTML = errors.map(e =>
+    `<span class="chip ${activeError === e ? 'active' : ''}" data-err="${e}">${ERROR_LABELS[e] || e}</span>`
   ).join('');
-  tagList.querySelectorAll('.tag-chip').forEach(el => {
-    el.addEventListener('click', () => {
-      activeTag = activeTag === el.dataset.tag ? null : el.dataset.tag;
-      render();
-    });
-  });
+  $('error-filters').querySelectorAll('.chip').forEach(c =>
+    c.addEventListener('click', () => { activeError = activeError === c.dataset.err ? null : c.dataset.err; render(); })
+  );
+}
 
-  if (!events.length) {
-    eventList.innerHTML = `
-      <div class="empty-state">
-        <div class="icon">📭</div>
-        <div>No entries yet. Hit <strong>+ New Entry</strong> to start your log.</div>
-      </div>`;
+// ── Render trade list ──────────────────────────────────────────────────────
+function render() {
+  const q = $('search').value.toLowerCase();
+  let trades = [...allTrades];
+
+  if (activeFilter !== 'all') trades = trades.filter(t => t.status === activeFilter);
+  if (activeSymbol) trades = trades.filter(t => t.symbol === activeSymbol);
+  if (activeError)  trades = trades.filter(t => t.error_category === activeError);
+  if (q) trades = trades.filter(t =>
+    (t.thesis || '').toLowerCase().includes(q) ||
+    (t.setup_notes || '').toLowerCase().includes(q) ||
+    (t.lessons || '').toLowerCase().includes(q) ||
+    t.symbol.toLowerCase().includes(q) ||
+    (t.strategy || '').toLowerCase().includes(q)
+  );
+
+  trades.sort((a, b) => b.entry_date.localeCompare(a.entry_date) || b.created_at.localeCompare(a.created_at));
+
+  if (!trades.length) {
+    $('trade-list').innerHTML = `<div class="empty-state"><div class="icon">📭</div><div>No trades found. Hit <strong>+ Log Trade</strong> to start.</div></div>`;
     return;
   }
 
   // Group by date
   const groups = {};
-  events.forEach(e => {
-    if (!groups[e.date]) groups[e.date] = [];
-    groups[e.date].push(e);
-  });
+  trades.forEach(t => { (groups[t.entry_date] = groups[t.entry_date] || []).push(t); });
 
   let html = '';
-  for (const date of Object.keys(groups)) {
-    html += `<div class="date-group-header">${fmt(date)}</div>`;
-    for (const e of groups[date]) {
-      const timeStr = e.time ? ` · ${e.time}` : '';
-      html += `
-        <div class="event-card status-${e.status}" data-id="${e.id}">
-          <div class="event-main">
-            <div class="event-title">${esc(e.title)}</div>
-            <div class="event-meta">
-              <span>${fmt(e.date)}${timeStr}</span>
-              ${getTags(e).map(t => `<span class="event-tag">${esc(t)}</span>`).join('')}
-              <span class="status-pill ${e.status}">${e.status}</span>
-            </div>
-            ${e.notes ? `<div class="event-notes">${esc(e.notes)}</div>` : ''}
-          </div>
-          <div class="event-actions">
-            <button class="btn-sm edit-btn" data-id="${e.id}">Edit</button>
-            ${e.status !== 'completed'
-              ? `<button class="btn-sm complete-btn" data-id="${e.id}">✓ Done</button>`
-              : ''}
-            <button class="btn-sm danger delete-btn" data-id="${e.id}">Delete</button>
-          </div>
-        </div>`;
-    }
+  for (const date of Object.keys(groups).sort().reverse()) {
+    html += `<div class="date-header">${fmtDate(date)}</div>`;
+    for (const t of groups[date]) html += tradeCard(t);
   }
+  $('trade-list').innerHTML = html;
 
-  eventList.innerHTML = html;
-
-  eventList.querySelectorAll('.edit-btn').forEach(b =>
-    b.addEventListener('click', () => openEdit(b.dataset.id)));
-  eventList.querySelectorAll('.complete-btn').forEach(b =>
-    b.addEventListener('click', () => markDone(b.dataset.id)));
-  eventList.querySelectorAll('.delete-btn').forEach(b =>
-    b.addEventListener('click', () => deleteEvent(b.dataset.id)));
+  $('trade-list').querySelectorAll('.edit-btn').forEach(b => b.addEventListener('click', () => openEdit(b.dataset.id)));
+  $('trade-list').querySelectorAll('.open-btn').forEach(b => b.addEventListener('click', () => quickStatus(b.dataset.id, 'open')));
+  $('trade-list').querySelectorAll('.close-btn').forEach(b => b.addEventListener('click', () => openClose(b.dataset.id)));
+  $('trade-list').querySelectorAll('.cancel-btn').forEach(b => b.addEventListener('click', () => quickStatus(b.dataset.id, 'cancelled')));
+  $('trade-list').querySelectorAll('.delete-btn').forEach(b => b.addEventListener('click', () => deleteTrade(b.dataset.id)));
 }
 
-function esc(str) {
-  return String(str)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function tradeCard(t) {
+  const isWin   = (t.actual_pnl_usd ?? 0) > 0;
+  const hasClose = t.status === 'closed';
+  const statusClass = t.status === 'closed' ? (isWin ? 'status-closed-win' : 'status-closed-loss') : `status-${t.status}`;
+  const stars   = t.rating ? '★'.repeat(t.rating) + '☆'.repeat(5 - t.rating) : '';
+
+  // Price row
+  const prices = [];
+  if (t.entry_price)  prices.push({ l: 'Entry',  v: fmtNum(t.entry_price),  c: '' });
+  if (t.stop_loss)    prices.push({ l: 'Stop',   v: fmtNum(t.stop_loss),    c: 'red' });
+  if (t.target_price) prices.push({ l: 'Target', v: fmtNum(t.target_price), c: 'green' });
+  if (t.expected_rr)  prices.push({ l: 'Exp R:R', v: t.expected_rr + 'R',  c: t.expected_rr >= 1.5 ? 'green' : '' });
+  if (t.risk_amount)  prices.push({ l: '$ Risk',  v: '$' + fmtNum(t.risk_amount), c: '' });
+  if (hasClose && t.actual_pnl_pct != null)
+    prices.push({ l: 'P&L', v: fmtPnl(t.actual_pnl_pct) + (t.actual_pnl_usd != null ? ` ($${fmtNum(t.actual_pnl_usd)})` : ''), c: isWin ? 'green' : 'red' });
+  if (hasClose && t.exit_reason)
+    prices.push({ l: 'Exit', v: EXIT_LABELS[t.exit_reason] || t.exit_reason, c: '' });
+
+  const priceHtml = prices.map(p => `
+    <div class="price-item">
+      <span class="pl">${p.l}</span>
+      <span class="pv ${p.c}">${esc(p.v)}</span>
+    </div>`).join('');
+
+  return `
+  <div class="trade-card ${statusClass}" data-id="${t.id}">
+    <div class="trade-main">
+      <div class="trade-header">
+        <span class="trade-symbol">${esc(t.symbol.replace('-PERP',''))}</span>
+        <span class="dir-badge ${t.direction}">${t.direction === 'LONG' ? '▲ LONG' : '▼ SHORT'}</span>
+        <span class="badge ${t.status}">${t.status}</span>
+        ${t.timeframe ? `<span style="font-size:.75rem;color:var(--muted)">${esc(t.timeframe)}</span>` : ''}
+        ${t.strategy  ? `<span style="font-size:.75rem;color:var(--muted)">${esc(t.strategy.replace('_',' '))}</span>` : ''}
+        ${t.leverage > 1 ? `<span style="font-size:.75rem;color:var(--orange)">${t.leverage}×</span>` : ''}
+      </div>
+      ${prices.length ? `<div class="trade-prices">${priceHtml}</div>` : ''}
+      ${t.thesis ? `<div class="trade-thesis">${esc(t.thesis)}</div>` : ''}
+      ${(t.error_category || t.rating) ? `
+        <div class="trade-analysis">
+          ${t.rating ? `<span class="stars">${stars}</span>` : ''}
+          ${t.error_category ? `<span class="error-tag">${esc(ERROR_LABELS[t.error_category] || t.error_category)}</span>` : ''}
+          ${t.lessons ? `<span style="font-size:.75rem;color:var(--muted);font-style:italic">"${esc(t.lessons.slice(0,80))}${t.lessons.length > 80 ? '…' : ''}"</span>` : ''}
+        </div>` : ''}
+    </div>
+    <div class="trade-actions">
+      <button class="btn-sm edit-btn" data-id="${t.id}">Edit</button>
+      ${t.status === 'planned' ? `<button class="btn-sm open-btn" data-id="${t.id}">Open ▶</button>` : ''}
+      ${t.status === 'open'    ? `<button class="btn-sm close-btn" data-id="${t.id}">Close ✓</button>` : ''}
+      ${t.status !== 'cancelled' && t.status !== 'closed' ? `<button class="btn-sm cancel-btn" data-id="${t.id}">Cancel</button>` : ''}
+      <button class="btn-sm danger delete-btn" data-id="${t.id}">Delete</button>
+    </div>
+  </div>`;
 }
 
-// Modal
+// ── Modal ──────────────────────────────────────────────────────────────────
 function openNew() {
-  document.getElementById('modal-title').textContent = 'New Entry';
-  document.getElementById('edit-id').value = '';
-  form.reset();
-  document.getElementById('f-date').value = today();
-  modal.classList.remove('hidden');
-  document.getElementById('f-title').focus();
+  $('modal-title').textContent = 'Log Trade';
+  $('edit-id').value = '';
+  $('trade-form').reset();
+  $('f-entry-date').value = today();
+  currentRating = 0;
+  updateStars(0);
+  switchTab('plan');
+  $('modal').classList.remove('hidden');
+  $('f-symbol').focus();
 }
 
 function openEdit(id) {
-  const e = allEvents.find(x => x.id === id);
-  if (!e) return;
-  document.getElementById('modal-title').textContent = 'Edit Entry';
-  document.getElementById('edit-id').value = e.id;
-  document.getElementById('f-title').value = e.title;
-  document.getElementById('f-date').value = e.date;
-  document.getElementById('f-time').value = e.time || '';
-  document.getElementById('f-tag').value = getTags(e).join(', ');
-  document.getElementById('f-status').value = e.status;
-  document.getElementById('f-notes').value = e.notes || '';
-  modal.classList.remove('hidden');
+  const t = allTrades.find(x => x.id === id);
+  if (!t) return;
+  $('modal-title').textContent = 'Edit Trade';
+  $('edit-id').value = t.id;
+  // Plan tab
+  $('f-symbol').value      = t.symbol || 'BTC-PERP';
+  $('f-direction').value   = t.direction || 'LONG';
+  $('f-timeframe').value   = t.timeframe || '';
+  $('f-strategy').value    = t.strategy  || '';
+  $('f-entry-date').value  = t.entry_date || today();
+  $('f-entry-time').value  = t.entry_time || '';
+  $('f-entry-price').value = t.entry_price || '';
+  $('f-stop-loss').value   = t.stop_loss   || '';
+  $('f-target-price').value= t.target_price|| '';
+  $('f-position-size').value=t.position_size||'';
+  $('f-leverage').value    = t.leverage    || 1;
+  $('f-risk-amount').value = t.risk_amount || '';
+  $('f-thesis').value      = t.thesis      || '';
+  $('f-setup-notes').value = t.setup_notes || '';
+  $('f-status').value      = t.status      || 'planned';
+  // Outcome tab
+  $('f-actual-entry').value= t.actual_entry|| '';
+  $('f-actual-exit').value = t.actual_exit || '';
+  $('f-exit-date').value   = t.exit_date   || '';
+  $('f-exit-time').value   = t.exit_time   || '';
+  $('f-pnl-pct').value     = t.actual_pnl_pct != null ? t.actual_pnl_pct : '';
+  $('f-pnl-usd').value     = t.actual_pnl_usd != null ? t.actual_pnl_usd : '';
+  $('f-exit-reason').value = t.exit_reason || '';
+  // Analysis tab
+  $('f-error-category').value = t.error_category || '';
+  $('f-lessons').value        = t.lessons || '';
+  currentRating = t.rating || 0;
+  updateStars(currentRating);
+
+  updateRRPreview();
+  switchTab('plan');
+  $('modal').classList.remove('hidden');
 }
 
-function closeModal() { modal.classList.add('hidden'); }
+function openClose(id) {
+  openEdit(id);
+  $('f-status').value = 'closed';
+  $('f-exit-date').value = today();
+  switchTab('outcome');
+}
 
-document.getElementById('new-btn').addEventListener('click', openNew);
-document.getElementById('modal-close').addEventListener('click', closeModal);
-document.getElementById('cancel-btn').addEventListener('click', closeModal);
-modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+function closeModal() { $('modal').classList.add('hidden'); }
 
-// Form submit
-form.addEventListener('submit', async e => {
-  e.preventDefault();
-  const id = document.getElementById('edit-id').value;
-  const data = {
-    title: document.getElementById('f-title').value.trim(),
-    date: document.getElementById('f-date').value,
-    time: document.getElementById('f-time').value,
-    tags: document.getElementById('f-tag').value || 'general',
-    status: document.getElementById('f-status').value,
-    notes: document.getElementById('f-notes').value.trim()
-  };
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+}
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
 
-  if (id) {
-    await fetch(`/api/events/${id}`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
-  } else {
-    await fetch('/api/events', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
-  }
+// ── R:R Preview ───────────────────────────────────────────────────────────
+function updateRRPreview() {
+  const ep  = parseFloat($('f-entry-price').value);
+  const sl  = parseFloat($('f-stop-loss').value);
+  const tp  = parseFloat($('f-target-price').value);
+  const ra  = parseFloat($('f-risk-amount').value);
+  const dir = $('f-direction').value;
+  const prev = $('rr-preview');
 
-  closeModal();
-  loadEvents();
+  if (!ep || !sl || !tp) { prev.classList.add('hidden'); return; }
+
+  const risk   = Math.abs(ep - sl);
+  const reward = Math.abs(tp - ep);
+  const rr     = risk > 0 ? (reward / risk) : 0;
+  const slPct  = (risk / ep * 100).toFixed(2);
+  const tpPct  = (reward / ep * 100).toFixed(2);
+
+  // Check direction consistency
+  const dirOk = dir === 'LONG' ? (tp > ep && sl < ep) : (tp < ep && sl > ep);
+
+  prev.classList.remove('hidden');
+  prev.innerHTML = `
+    <div class="rr-item"><span class="rl">R:R</span><span class="rv ${rr >= 1.5 ? 'good' : 'bad'}">${rr.toFixed(2)}R</span></div>
+    <div class="rr-item"><span class="rl">Stop dist</span><span class="rv">${slPct}%</span></div>
+    <div class="rr-item"><span class="rl">Target dist</span><span class="rv">${tpPct}%</span></div>
+    ${ra ? `<div class="rr-item"><span class="rl">Max loss</span><span class="rv red">-$${fmtNum(ra)}</span></div>` : ''}
+    ${ra && rr > 0 ? `<div class="rr-item"><span class="rl">Max gain</span><span class="rv good">+$${fmtNum(ra * rr)}</span></div>` : ''}
+    ${!dirOk ? `<div class="rr-item"><span class="rv bad">⚠ Check direction vs prices</span></div>` : ''}
+  `;
+}
+
+['f-entry-price','f-stop-loss','f-target-price','f-risk-amount','f-direction']
+  .forEach(id => $(id).addEventListener('input', updateRRPreview));
+
+// ── Star rating ───────────────────────────────────────────────────────────
+function updateStars(n) {
+  document.querySelectorAll('#star-rating button').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.star) <= n);
+  });
+  $('f-rating').value = n;
+}
+document.querySelectorAll('#star-rating button').forEach(b => {
+  b.addEventListener('click', () => {
+    currentRating = parseInt(b.dataset.star) === currentRating ? 0 : parseInt(b.dataset.star);
+    updateStars(currentRating);
+  });
 });
 
-// Actions
-async function markDone(id) {
-  await fetch(`/api/events/${id}`, {
+// ── Form submit ───────────────────────────────────────────────────────────
+$('trade-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const id = $('edit-id').value;
+
+  const payload = {
+    symbol:        $('f-symbol').value,
+    direction:     $('f-direction').value,
+    timeframe:     $('f-timeframe').value || null,
+    strategy:      $('f-strategy').value  || null,
+    entry_date:    $('f-entry-date').value,
+    entry_time:    $('f-entry-time').value || null,
+    entry_price:   parseFloat($('f-entry-price').value) || null,
+    stop_loss:     parseFloat($('f-stop-loss').value)   || null,
+    target_price:  parseFloat($('f-target-price').value)|| null,
+    position_size: parseFloat($('f-position-size').value)||null,
+    leverage:      parseFloat($('f-leverage').value)    || 1,
+    risk_amount:   parseFloat($('f-risk-amount').value) || null,
+    thesis:        $('f-thesis').value.trim()      || null,
+    setup_notes:   $('f-setup-notes').value.trim() || null,
+    status:        $('f-status').value,
+    // Outcome
+    actual_entry:  parseFloat($('f-actual-entry').value)|| null,
+    actual_exit:   parseFloat($('f-actual-exit').value) || null,
+    exit_date:     $('f-exit-date').value || null,
+    exit_time:     $('f-exit-time').value || null,
+    actual_pnl_pct:parseFloat($('f-pnl-pct').value)    || null,
+    actual_pnl_usd:parseFloat($('f-pnl-usd').value)    || null,
+    exit_reason:   $('f-exit-reason').value || null,
+    // Analysis
+    rating:        currentRating || null,
+    error_category:$('f-error-category').value || null,
+    lessons:       $('f-lessons').value.trim() || null,
+  };
+
+  const method = id ? 'PATCH' : 'POST';
+  const url    = id ? `/api/trades/${id}` : '/api/trades';
+  await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+
+  closeModal();
+  loadAll();
+});
+
+// ── Quick actions ─────────────────────────────────────────────────────────
+async function quickStatus(id, status) {
+  await fetch(`/api/trades/${id}`, {
     method: 'PATCH', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ status: 'completed' })
+    body: JSON.stringify({ status })
   });
-  loadEvents();
+  loadAll();
 }
 
-async function deleteEvent(id) {
-  if (!confirm('Delete this entry?')) return;
-  await fetch(`/api/events/${id}`, { method: 'DELETE' });
-  loadEvents();
+async function deleteTrade(id) {
+  if (!confirm('Delete this trade?')) return;
+  await fetch(`/api/trades/${id}`, { method: 'DELETE' });
+  loadAll();
 }
 
-// Filter buttons
+// ── Filter buttons ────────────────────────────────────────────────────────
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
@@ -196,7 +370,12 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   });
 });
 
-searchInput.addEventListener('input', render);
+// ── Modal wiring ──────────────────────────────────────────────────────────
+$('new-btn').addEventListener('click', openNew);
+$('modal-close').addEventListener('click', closeModal);
+$('cancel-btn').addEventListener('click', closeModal);
+$('modal').addEventListener('click', e => { if (e.target === $('modal')) closeModal(); });
+$('search').addEventListener('input', render);
 
-// Init
-loadEvents();
+// ── Boot ──────────────────────────────────────────────────────────────────
+loadAll();
