@@ -1,57 +1,47 @@
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-const PORT = 3741;
-const DATA_FILE = path.join(__dirname, 'events.json');
+const PORT = process.env.PORT || 3741;
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-function loadEvents() {
-  if (!fs.existsSync(DATA_FILE)) return [];
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-}
-
-function saveEvents(events) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
-}
-
 // GET all events
-app.get('/api/events', (req, res) => {
-  res.json(loadEvents());
+app.get('/api/events', async (req, res) => {
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 // POST new event
-app.post('/api/events', (req, res) => {
-  const events = loadEvents();
-  const rawTags = req.body.tags || req.body.tag || 'general';
-  const tags = Array.isArray(rawTags)
-    ? rawTags
-    : rawTags.split(',').map(t => t.trim()).filter(Boolean);
+app.post('/api/events', async (req, res) => {
+  const { title, notes, date, time, tags, status } = req.body;
+  const parsedTags = Array.isArray(tags)
+    ? tags
+    : (tags || 'general').split(',').map(t => t.trim()).filter(Boolean);
 
-  const event = {
-    id: Date.now().toString(),
-    title: req.body.title,
-    notes: req.body.notes || '',
-    date: req.body.date,
-    time: req.body.time || '',
-    tags: tags.length ? tags : ['general'],
-    status: req.body.status || 'active',
-    createdAt: new Date().toISOString()
-  };
-  events.push(event);
-  saveEvents(events);
-  res.json(event);
+  const { data, error } = await supabase
+    .from('events')
+    .insert([{ title, notes: notes || '', date, time: time || '', tags: parsedTags, status: status || 'active' }])
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 // PATCH update event
-app.patch('/api/events/:id', (req, res) => {
-  const events = loadEvents();
-  const idx = events.findIndex(e => e.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-
+app.patch('/api/events/:id', async (req, res) => {
   const patch = { ...req.body };
   if (patch.tags !== undefined) {
     const raw = patch.tags;
@@ -59,19 +49,25 @@ app.patch('/api/events/:id', (req, res) => {
       ? raw
       : raw.split(',').map(t => t.trim()).filter(Boolean);
     if (!patch.tags.length) patch.tags = ['general'];
-    delete patch.tag;
   }
 
-  events[idx] = { ...events[idx], ...patch };
-  saveEvents(events);
-  res.json(events[idx]);
+  const { data, error } = await supabase
+    .from('events')
+    .update(patch)
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 // DELETE event
-app.delete('/api/events/:id', (req, res) => {
-  let events = loadEvents();
-  events = events.filter(e => e.id !== req.params.id);
-  saveEvents(events);
+app.delete('/api/events/:id', async (req, res) => {
+  const { error } = await supabase
+    .from('events')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 });
 
