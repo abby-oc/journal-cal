@@ -10,6 +10,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// ── Basic Auth ────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const auth = req.headers['authorization'];
+  if (auth && auth.startsWith('Basic ')) {
+    const [user, pass] = Buffer.from(auth.slice(6), 'base64').toString().split(':');
+    if (user === (process.env.JOURNAL_USER || 'bk') &&
+        pass === (process.env.JOURNAL_PASS || 'vest2026')) {
+      return next();
+    }
+  }
+  res.set('WWW-Authenticate', 'Basic realm="Trade Journal"');
+  return res.status(401).send('Unauthorized');
+});
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
