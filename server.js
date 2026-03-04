@@ -30,9 +30,20 @@ function validCookie(cookieHeader) {
   return sig === sign(ts);
 }
 
-// ── Login page ────────────────────────────────────────────────────────────
+// ── Login page + handler (GET — avoids Vercel body-parsing edge issues) ──
 app.get('/login', (req, res) => {
-  const err = req.headers.referer?.includes('/login') ? '' : '';
+  // If password submitted via query param, validate it
+  if (req.query.pass) {
+    if (req.query.pass === PASS) {
+      const ts  = Date.now().toString();
+      const tok = `${ts}.${sign(ts)}`;
+      res.setHeader('Set-Cookie', `${COOKIE}=${tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${7*24*3600}`);
+      return res.redirect('/');
+    }
+    return res.redirect('/login?err=1');
+  }
+
+  // Render login form
   res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>Trade Journal</title>
 <style>
@@ -55,28 +66,13 @@ app.get('/login', (req, res) => {
   <div class="brand">📒</div>
   <h2>Trade Journal</h2>
   ${req.query.err ? '<div class="err">Wrong password — try again</div>' : ''}
-  <form method="POST" action="/login">
+  <form method="GET" action="/login">
     <div style="display:flex;flex-direction:column;gap:10px">
       <input type="password" name="pass" placeholder="Password" autofocus autocomplete="current-password"/>
       <button type="submit">Enter →</button>
     </div>
   </form>
 </div></body></html>`);
-});
-
-app.post('/login', (req, res) => {
-  let body = '';
-  req.on('data', chunk => { body += chunk.toString(); });
-  req.on('end', () => {
-    const pass = new URLSearchParams(body).get('pass');
-    if (pass === PASS) {
-      const ts  = Date.now().toString();
-      const tok = `${ts}.${sign(ts)}`;
-      res.setHeader('Set-Cookie', `${COOKIE}=${tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${7*24*3600}`);
-      return res.redirect('/');
-    }
-    res.redirect('/login?err=1');
-  });
 });
 
 // ── Auth gate ─────────────────────────────────────────────────────────────
